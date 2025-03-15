@@ -25,8 +25,10 @@ void script_cmd_infinite_background_scroll(SCRIPT_CTX* THIS) OLDCALL __banked {
     infinite_scroll_direction = vm_pop(THIS, 1);
     infinite_scroll_speed = vm_pop(THIS, 1);
 
-	// PLAYER.pinned = 1;
-
+  for (int i = 0; i < MAX_ACTORS; i++) {
+        actors[i].pinned = 1;
+        actors[i].collision_enabled = 1;
+    }
     // Activate infinite scrolling mode.
     infinite_scroll_active = 1;
 

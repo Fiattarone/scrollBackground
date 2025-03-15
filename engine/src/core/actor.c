@@ -60,6 +60,35 @@ UBYTE allocated_hardware_sprites;
 INT16 initial_player_x_pos;
 INT16 initial_player_y_pos;
 
+typedef enum {
+    COLLISION_SIDE_LEFT,
+    COLLISION_SIDE_MIDDLE,
+    COLLISION_SIDE_RIGHT
+} collision_side_e;
+
+collision_side_e get_collision_side(actor_t *player, actor_t *other) BANKED {
+    // Calculate player's center X coordinate.
+    // Assuming that the bounding box fields "left" and "right" represent offsets relative to the actor's pos.
+    INT16 player_width = player->bounds.right - player->bounds.left;
+    INT16 player_center = player->pos.x + (player_width >> 1);
+
+    // Calculate other actor's center X coordinate.
+    INT16 other_width = other->bounds.right - other->bounds.left;
+    INT16 other_center = other->pos.x + (other_width >> 1);
+
+    INT16 diff = other_center - player_center;
+    // Use 25% of player's width as a threshold
+    INT16 threshold = player_width >> 2;
+
+    if (diff < -threshold)
+        return COLLISION_SIDE_LEFT;
+    else if (diff > threshold)
+        return COLLISION_SIDE_RIGHT;
+    else
+        return COLLISION_SIDE_MIDDLE;
+}
+
+
 void actors_init(void) BANKED {
     actors_active_tail = actors_active_head = actors_inactive_head = NULL;
     player_moving           = FALSE;
@@ -82,16 +111,27 @@ void player_init(void) BANKED {
 	}
 }
 
+// Define this helper in actor.c (or another appropriate file)
+void handle_collision(actor_t *actor) BANKED {
+    // Remove the actor that hit the player.
+    deactivate_actor(actor);
+	// script_memory[1] = getActorIndex(actor->id);
+	//update score? 
+
+    // Damage the player only if not already invulnerable.
+    // if (player_iframes == 0) {
+        player_iframes = PLAYER_HURT_IFRAMES;  // Number of frames the player will blink
+        PLAYER.blinking = 1; 
+    // }
+}
+
 void actors_update(void) NONBANKED {
     UBYTE _save = CURRENT_BANK;
     static actor_t *actor;
     static uint8_t screen_tile16_x, screen_tile16_y;
     static uint8_t actor_tile16_x, actor_tile16_y;
 
-    // Convert scroll pos to 16px tile coordinates
-    // allowing full range of scene to be represented in 7 bits
-    // offset by 64 to allow signed comparisions on
-    // unsigned int values (is faster)
+    // Convert scroll pos to 16px tile coordinates.
     screen_tile16_x = (draw_scroll_x >> 4) + TILE16_OFFSET;
     screen_tile16_y = (draw_scroll_y >> 4) + TILE16_OFFSET;
 
@@ -100,8 +140,7 @@ void actors_update(void) NONBANKED {
         spritesheet_t *sprite = emote_actor->sprite.ptr;
         screen_x = (emote_actor->pos.x >> 4) - scroll_x + 8 + sprite->emote_origin.x;
         screen_y = (emote_actor->pos.y >> 4) - scroll_y + 8 + sprite->emote_origin.y;
-
-        SWITCH_ROM(BANK(ACTOR));  // bank of emote_offsets[] and emote_metasprite[]
+        SWITCH_ROM(BANK(ACTOR));
         if (emote_timer < EMOTE_BOUNCE_FRAMES) {
             screen_y += emote_offsets[emote_timer];
         }
@@ -116,7 +155,8 @@ void actors_update(void) NONBANKED {
 
     static bool window_hide_actors;
 #ifdef CGB
-    window_hide_actors = (!_is_CGB) && ((overlay_priority & S_PRIORITY) == 0) && (!show_actors_on_overlay) && (WX_REG > DEVICE_WINDOW_PX_OFFSET_X);
+    window_hide_actors = (!_is_CGB) && ((overlay_priority & S_PRIORITY) == 0)
+                        && (!show_actors_on_overlay) && (WX_REG > DEVICE_WINDOW_PX_OFFSET_X);
 #else
     window_hide_actors = (!show_actors_on_overlay) && (WX_REG > DEVICE_WINDOW_PX_OFFSET_X);
 #endif
@@ -124,54 +164,72 @@ void actors_update(void) NONBANKED {
     actor = actors_active_tail;
     while (actor) {
         if (actor->pinned) {
-            screen_x = (actor->pos.x >> 4) + 8, screen_y = (actor->pos.y >> 4) + 8;
+            screen_x = (actor->pos.x >> 4) + 8;
+            screen_y = (actor->pos.y >> 4) + 8;
         } else {
-            // Bottom right coordinate of actor in 16px tile coordinates
-            // Subtract bounding box estimate width/height
-            // and offset by 64 to allow signed comparisons with screen tiles
             actor_tile16_x = (actor->pos.x >> 8) + ACTOR_BOUNDS_TILE16_HALF + TILE16_OFFSET;
             actor_tile16_y = (actor->pos.y >> 8) + ACTOR_BOUNDS_TILE16_HALF + TILE16_OFFSET;
-
-            if (
-                // Actor right edge < screen left edge
-                (actor_tile16_x < screen_tile16_x) ||
-                // Actor left edge > screen right edge
+            if ((actor_tile16_x < screen_tile16_x) ||
                 ((actor_tile16_x - (ACTOR_BOUNDS_TILE16 + SCREEN_TILE16_W)) > screen_tile16_x) ||
-                // Actor bottom edge < screen top edge
                 (actor_tile16_y < screen_tile16_y) ||
-                // Actor top edge > screen bottom edge
-                ((actor_tile16_y - (ACTOR_BOUNDS_TILE16 + SCREEN_TILE16_H)) > screen_tile16_y)
-            ) {
+                ((actor_tile16_y - (ACTOR_BOUNDS_TILE16 + SCREEN_TILE16_H)) > screen_tile16_y))
+            {
                 if (actor->persistent) {
                     actor = actor->prev;
                     continue;
                 }
-                // Deactivate if offscreen
-                actor_t * prev = actor->prev;
-                if (!VM_ISLOCKED()) deactivate_actor(actor);
+                actor_t *prev = actor->prev;
+                if (!VM_ISLOCKED()) {
+                    deactivate_actor(actor);
+                }
                 actor = prev;
                 continue;
             }
-            // calculate screen coordinates
-            screen_x = ((actor->pos.x >> 4) + 8) - draw_scroll_x, screen_y = ((actor->pos.y >> 4) + 8) - draw_scroll_y;
+            screen_x = ((actor->pos.x >> 4) + 8) - draw_scroll_x;
+            screen_y = ((actor->pos.y >> 4) + 8) - draw_scroll_y;
         }
+        
+        // --- Collision Check ---
+        if (actor != &PLAYER && actor->collision_enabled) {
+            if (bb_intersects(&PLAYER.bounds, &PLAYER.pos, &actor->bounds, &actor->pos)) {
+                collision_side_e side = get_collision_side(&PLAYER, actor);
+                handle_collision(actor);
+            }
+        }
+        // --- End Collision Check ---
+
+        // Skip hidden actors or actors under the window.
         if (actor->hidden) {
             actor = actor->prev;
             continue;
-        } else if ((window_hide_actors) && (((screen_x + 8) > WX_REG) && ((screen_y - 8) > WY_REG))) {
-            // Hide if under window (don't deactivate)
+        } else if (window_hide_actors && (((screen_x + 8) > WX_REG) && ((screen_y - 8) > WY_REG))) {
             actor = actor->prev;
             continue;
         }
 
-        // Check reached animation tick frame
-        if ((actor->anim_tick != ANIM_PAUSED) && (game_time & actor->anim_tick) == 0) {
+        // --- Player-specific blink handling ---
+        if (actor == &PLAYER) {
+            // Decrement the blink/invulnerability timer every frame.
+            if (player_iframes > 0) {
+                player_iframes--;
+                if (player_iframes == 0) {
+                    PLAYER.blinking = 0;  // Stop blinking when timer expires.
+                }
+            }
+            // If blinking, skip drawing on even frames.
+            if (PLAYER.blinking && ((game_time & 1) == 0)) {
+                actor = actor->prev;
+                continue;
+            }
+        }
+        // --- End Player-specific handling ---
+
+        // For non-player actors, update animation tick.
+        if ((actor->anim_tick != ANIM_PAUSED) && ((game_time & actor->anim_tick) == 0)) {
             actor->frame++;
-            // Check reached end of animation
             if (actor->frame == actor->frame_end) {
                 if (actor->anim_noloop) {
                     actor->frame--;
-                    // TODO: execute onAnimationEnd here + set to ANIM_PAUSED?
                 } else {
                     actor->frame = actor->frame_start;
                 }
@@ -180,7 +238,6 @@ void actors_update(void) NONBANKED {
 
         SWITCH_ROM(actor->sprite.bank);
         spritesheet_t *sprite = actor->sprite.ptr;
-
         allocated_hardware_sprites += move_metasprite(
             *(sprite->metasprites + actor->frame),
             actor->base_tile,
@@ -191,9 +248,10 @@ void actors_update(void) NONBANKED {
 
         actor = actor->prev;
     }
-
     SWITCH_ROM(_save);
 }
+
+
 
 void deactivate_actor(actor_t *actor) BANKED {
 #ifdef STRICT

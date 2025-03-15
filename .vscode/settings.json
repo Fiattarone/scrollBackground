@@ -1,0 +1,7 @@
+{
+	"files.associations": {
+		"actor.h": "c",
+		"camera.h": "c",
+		"__locale": "c"
+	}
+}

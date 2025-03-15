@@ -114,13 +114,13 @@ void scroll_update(void) BANKED {
             y = ((camera_y >> 4) - (SCREEN_HEIGHT >> 1));
             // Adjust the player's world coordinate (fixed point) by converting offset to fixed point.
             // This ensures that (PLAYER.pos.x >> 4) remains equal to its original screen coordinate.
-            PLAYER.pos.x = initial_player_x + (offset << 4);
+            // PLAYER.pos.x = initial_player_x + (offset << 4);
         } else {
             // Vertical infinite scroll:
             offset = (((infinite_background_scroll >> 4) % BACKGROUND_HEIGHT) - (SCREEN_HEIGHT >> 1));
             y = offset;
             x = ((camera_x >> 4) - (SCREEN_WIDTH >> 1));
-            PLAYER.pos.y = initial_player_y + (offset << 4);
+            // PLAYER.pos.y = initial_player_y + (offset << 4);
 
         }
     } else {
